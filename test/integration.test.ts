@@ -81,6 +81,20 @@ describe('health', () => {
   });
 });
 
+describe('Google sign-in (honest gating)', () => {
+  it('reports which providers are actually configured', async () => {
+    const res = await request(app).get('/api/auth/providers');
+    expect(res.status).toBe(200);
+    expect(res.body.google).toBe(false); // no GOOGLE_CLIENT_ID in tests — honest
+  });
+
+  it('does not send users to Google when it is not configured', async () => {
+    const res = await request(app).get('/api/auth/google').expect(302);
+    expect(res.headers.location).not.toContain('accounts.google.com');
+    expect(res.headers.location).toContain('google=not_configured');
+  });
+});
+
 describe('authentication', () => {
   const email = 'rafi@test.dev';
   it('registers a user', async () => {
@@ -462,5 +476,16 @@ describe('calling authorization', () => {
     });
     const res = await request(app).get(`/api/calls/${call.body.call.id}/token`).set('Cookie', outsideCookie);
     expect(res.status).toBe(403);
+  });
+
+  it('lets a member leave through /members/me (not the :membershipId route)', async () => {
+    const me = await request(app).get('/api/families').set('Cookie', otherCookie);
+    const familyId = me.body.families[0].id;
+    const leave = await request(app).delete(`/api/families/${familyId}/members/me`).set('Cookie', otherCookie);
+    expect(leave.status).toBe(200);
+
+    const after = await request(app).get(`/api/families/${familyId}`).set('Cookie', memberCookie);
+    expect(after.status).toBe(200);
+    expect(after.body.members.map((m: { name: string }) => m.name)).not.toContain('Nusrat');
   });
 });

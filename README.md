@@ -28,7 +28,7 @@ Smart Family coordinates real family life — appointments, care tasks, reminder
 | Safety: emergency contacts, explicit SOS handoff, consent-based location flag | ✅ honest limits |
 | Health & wellbeing resources, updates feed, profile / privacy / account deletion | ✅ |
 
-What is **not** implemented (and никогда claimed): email delivery, push notifications, call recording, automatic emergency dispatch, covert location tracking.
+What is **not** implemented (and never falsely claimed): email delivery, push notifications, call recording, automatic emergency dispatch, covert location tracking.
 
 ## Tech stack
 
@@ -138,11 +138,13 @@ The action flow: message → authorized context → Gemini structured JSON → Z
 ## Testing
 
 ```bash
-npm test            # unit tests (no DB needed)
-npx vitest run test/integration.test.ts   # full-stack tests (downloads a MongoDB binary once, then caches)
+npm test            # all tests (unit + integration; the integration part downloads a
+                    # MongoDB binary once on a fresh machine, then it is cached)
+node scripts/boot-smoke.mjs   # boots the built server (dist/index.js) against an
+                              # ephemeral MongoDB and verifies /api/health
 ```
 
-The integration suite covers registration/login/session, family authorization boundaries (401/403 by construction, not by id), task/calendar/reminder validation, the honest `AI_NOT_CONFIGURED` fallback, real-time chat delivery over Socket.IO, and call-token authorization. It uses in-memory MongoDB — no Atlas data is touched.
+The integration suite covers registration/login/session, family authorization boundaries (401/403 by construction, not by id), task/calendar/reminder validation, leave-family routing, the honest `AI_NOT_CONFIGURED` fallback, real-time chat delivery over Socket.IO (cookie-authenticated handshake), call-token authorization, and conflict detection. It uses in-memory MongoDB — no Atlas data is touched. The boot smoke test verifies the exact production artifact end to end (env validation → DB connect → scheduler → Socket.IO → listening).
 
 ## Deployment (Render)
 

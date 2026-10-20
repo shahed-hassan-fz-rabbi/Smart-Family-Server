@@ -262,24 +262,8 @@ familiesRouter.patch('/:familyId/members/:membershipId', validate(updateMemberSc
   }
 });
 
-// DELETE /api/families/:familyId/members/:membershipId — remove member (admin+, not owner)
-familiesRouter.delete('/:familyId/members/:membershipId', async (req, res, next) => {
-  try {
-    await requireFamilyMembership(req, req.params.familyId, 'admin');
-    const membership = await FamilyMembership.findOne({
-      _id: req.params.membershipId,
-      familyId: req.params.familyId,
-    });
-    if (!membership) throw new HttpError(404, 'Member not found');
-    if (membership.role === 'owner') throw new HttpError(403, 'The family owner cannot be removed here');
-    await membership.deleteOne();
-    res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
-
 // DELETE /api/families/:familyId/members/me — leave family
+// (registered before the :membershipId route so "me" is never treated as an id)
 familiesRouter.delete('/:familyId/members/me', async (req, res, next) => {
   try {
     await requireFamilyMembership(req, req.params.familyId);
@@ -291,6 +275,23 @@ familiesRouter.delete('/:familyId/members/me', async (req, res, next) => {
     if (membership.role === 'owner') {
       throw new HttpError(403, 'The family owner must transfer ownership or delete the family first');
     }
+    await membership.deleteOne();
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/families/:familyId/members/:membershipId — remove member (admin+, not owner)
+familiesRouter.delete('/:familyId/members/:membershipId', async (req, res, next) => {
+  try {
+    await requireFamilyMembership(req, req.params.familyId, 'admin');
+    const membership = await FamilyMembership.findOne({
+      _id: req.params.membershipId,
+      familyId: req.params.familyId,
+    });
+    if (!membership) throw new HttpError(404, 'Member not found');
+    if (membership.role === 'owner') throw new HttpError(403, 'The family owner cannot be removed here');
     await membership.deleteOne();
     res.json({ ok: true });
   } catch (err) {

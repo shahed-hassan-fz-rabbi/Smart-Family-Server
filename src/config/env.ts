@@ -14,6 +14,12 @@ const envSchema = z.object({
   JWT_EXPIRES_IN_DAYS: z.coerce.number().default(30),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default('gemini-2.0-flash'),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_REDIRECT_URI: z
+    .string()
+    .optional()
+    .describe('Full https callback URL registered in Google Cloud Console; defaults to <server origin>/api/auth/google/callback'),
   LIVEKIT_URL: z.string().optional(),
   LIVEKIT_API_KEY: z.string().optional(),
   LIVEKIT_API_SECRET: z.string().optional(),
@@ -52,6 +58,11 @@ export const config = {
     apiKey: env.GEMINI_API_KEY ?? '',
     model: env.GEMINI_MODEL,
     enabled: Boolean(env.GEMINI_API_KEY),
+  },
+  google: {
+    clientId: env.GOOGLE_CLIENT_ID ?? '',
+    clientSecret: env.GOOGLE_CLIENT_SECRET ?? '',
+    enabled: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
   },
   livekit: {
     url: env.LIVEKIT_URL ?? '',

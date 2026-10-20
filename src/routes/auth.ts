@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import type { Response } from 'express';
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'node:crypto';
 import { User } from '../models/user';
 import { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema } from '../validators/auth';
 import { validate } from '../middleware/validate';
@@ -128,5 +130,127 @@ authRouter.post('/reset-password', validate(resetPasswordSchema), async (req, re
     res.json({ ok: true });
   } catch (err) {
     next(err);
+  }
+});
+
+/* ---------------------------------------------------------------------------
+ * Google sign-in (OpenID Connect, authorization-code flow).
+ *
+ * Honest gating: when GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET are not set the
+ * button still exists in the UI, but every attempt lands back on /login with
+ * an explicit "not configured" error — nothing pretends to work.
+ *
+ * Identity is established through Google's userinfo endpoint with the returned
+ * access token, so no client-controlled identity is ever trusted.
+ * ------------------------------------------------------------------------- */
+
+/** A password hash that no password can ever match — for Google-only accounts. */
+const UNUSABLE_PASSWORD_HASH = bcrypt.hashSync(randomBytes(24).toString('hex'), 12);
+
+function googleRedirect(res: Response, reason: string): void {
+  const sep = config.frontendUrl.includes('?') ? '&' : '?';
+  res.redirect(302, `${config.frontendUrl}${sep}google=${reason}`);
+}
+
+authRouter.get('/providers', (_req, res) => {
+  res.json({ google: config.google.enabled });
+});
+
+authRouter.get('/google', (req, res) => {
+  if (!config.google.enabled) {
+    return googleRedirect(res, 'not_configured');
+  }
+  const state = randomBytes(16).toString('hex');
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const params = new URLSearchParams({
+    client_id: config.google.clientId,
+    redirect_uri: `${origin}/api/auth/google/callback`,
+    response_type: 'code',
+    scope: 'openid email profile',
+    state,
+    prompt: 'select_account',
+  });
+  res
+    .cookie('g_state', state, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: config.isProd,
+      maxAge: 10 * 60 * 1000,
+      path: '/',
+    })
+    .redirect(302, `https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+authRouter.get('/google/callback', async (req, res) => {
+  const stateCookie = req.cookies?.['g_state'];
+  res.clearCookie('g_state', { path: '/' });
+  try {
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+    if (!code || !state || state !== stateCookie) {
+      return googleRedirect(res, 'invalid_state');
+    }
+
+    const origin = `${req.protocol}://${req.get('host')}`;
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: config.google.clientId,
+        client_secret: config.google.clientSecret,
+        redirect_uri: `${origin}/api/auth/google/callback`,
+        grant_type: 'authorization_code',
+      }),
+    });
+    if (!tokenRes.ok) {
+      logger.warn({ status: tokenRes.status }, 'Google token exchange failed');
+      return googleRedirect(res, 'token_exchange_failed');
+    }
+    const tokens = (await tokenRes.json()) as { access_token?: string };
+    if (!tokens.access_token) {
+      return googleRedirect(res, 'token_missing');
+    }
+
+    const profileRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
+    if (!profileRes.ok) {
+      return googleRedirect(res, 'profile_failed');
+    }
+    const profile = (await profileRes.json()) as {
+      email?: string;
+      email_verified?: boolean;
+      name?: string;
+    };
+    if (!profile.email) {
+      return googleRedirect(res, 'no_email');
+    }
+    if (profile.email_verified !== true) {
+      return googleRedirect(res, 'email_unverified');
+    }
+
+    let user = await User.findOne({ email: profile.email.toLowerCase(), deletedAt: null });
+    if (!user) {
+      user = await User.create({
+        name: profile.name?.trim() || profile.email.split('@')[0],
+        email: profile.email.toLowerCase(),
+        passwordHash: UNUSABLE_PASSWORD_HASH,
+      });
+    } else if (user.name !== profile.name && (profile.name ?? '').trim().length > 0) {
+      // Keep the locally chosen name unless Google only now provided one.
+      if (!user.name) {
+        user.name = profile.name!.trim();
+        await user.save();
+      }
+    }
+
+    const token = signSessionToken(String(user._id), user.email);
+    return res
+      .cookie(SESSION_COOKIE_NAME, token, COOKIE_OPTS)
+      .redirect(302, `${config.frontendUrl}/dashboard`);
+  } catch (err) {
+    logger.error({ err }, 'Google OAuth callback failed');
+    return googleRedirect(res, 'failed');
   }
 });

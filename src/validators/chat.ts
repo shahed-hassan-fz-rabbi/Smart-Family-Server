@@ -5,7 +5,8 @@ const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
 export const createConversationSchema = z.object({
   familyId: objectId,
   type: z.enum(['dm', 'group']),
-  participantIds: z.array(objectId).min(2).max(100),
+  // The requesting user is appended server-side; clients send only the other members.
+  participantIds: z.array(objectId).min(1).max(100),
   name: z.string().trim().max(120).optional(),
 });
 
