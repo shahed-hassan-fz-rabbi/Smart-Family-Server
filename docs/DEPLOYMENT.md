@@ -31,7 +31,7 @@ This guide deploys the Smart Family API to [Render](https://render.com) with Mon
 | `FRONTEND_URL` | ✅ | Your Vercel URL, e.g. `https://smart-family-client.vercel.app` |
 | `CORS_ORIGINS` | ✅ | Same value(s), comma-separated if multiple (falls back to `FRONTEND_URL`) |
 | `GEMINI_API_KEY` | optional | Enables the AI assistant. Without it AI routes return `503 AI_NOT_CONFIGURED` (honest, by design) |
-| `GEMINI_MODEL` | optional | Defaults to `gemini-2.0-flash` |
+| `GEMINI_MODEL` | optional | Defaults to `gemini-3.8-flash` |
 | `LIVEKIT_URL` | optional | `wss://...` — enables calling. Without it call tokens return `503 CALLING_NOT_CONFIGURED` |
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | optional | From LiveKit cloud project keys |
 | `JWT_EXPIRES_IN_DAYS` | optional | Defaults to `30` |

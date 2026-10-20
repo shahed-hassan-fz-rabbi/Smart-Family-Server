@@ -16,6 +16,15 @@ import { io, Socket } from 'socket.io-client';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'integration-test-secret-0123456789abcdef';
+// Isolate tests from any developer's real `.env` (e.g. a live GEMINI_API_KEY):
+// dotenv only fills UNSET variables, so pre-setting empty values keeps the
+// "not configured" integrations honestly unconfigured inside tests.
+process.env.GEMINI_API_KEY = '';
+process.env.GOOGLE_CLIENT_ID = '';
+process.env.GOOGLE_CLIENT_SECRET = '';
+process.env.LIVEKIT_URL = '';
+process.env.LIVEKIT_API_KEY = '';
+process.env.LIVEKIT_API_SECRET = '';
 
 let mongod: MongoMemoryServer;
 let app: import('express').Express;

@@ -123,7 +123,7 @@ All list reads require `familyId` and verify membership server-side; sender/user
 ## Gemini AI setup
 
 1. Get a key at [Google AI Studio](https://aistudio.google.com/apikey).
-2. Set `GEMINI_API_KEY` (server-side only — never in the frontend) and optionally `GEMINI_MODEL` (default `gemini-2.0-flash`).
+2. Set `GEMINI_API_KEY` (server-side only — never in the frontend) and optionally `GEMINI_MODEL` (default `gemini-3.8-flash`).
 3. Without a key, AI routes respond `503 AI_NOT_CONFIGURED` and persist an honest fallback message — the app never fakes AI output.
 
 The action flow: message → authorized context → Gemini structured JSON → Zod-validated proposal → persisted as `AIProposal` → user Confirm/Edit/Cancel → backend re-authorization + Zod re-validation → execution via the same services used by manual actions → real result reported.

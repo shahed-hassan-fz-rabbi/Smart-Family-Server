@@ -44,7 +44,7 @@ Local changes (the finished code including Google sign-in) are not yet committed
 ## Phase 3 — Gemini AI key (required for the AI assistant)
 
 - [ ] 10. Open https://aistudio.google.com/apikey → **Create API key** → copy (**secret**).
-- [ ] 11. Put it in `Smart-Family-Server/.env` as `GEMINI_API_KEY=...` (model `GEMINI_MODEL=gemini-2.0-flash` is already the default — no change needed).
+- [ ] 11. Put it in `Smart-Family-Server/.env` as `GEMINI_API_KEY=...` (model `GEMINI_MODEL=gemini-3.8-flash` is already the default — no change needed).
 - [ ] 12. Verify: restart `npm run dev`, open the app's Assistant page, send
       "Tomorrow my mother has a doctor appointment, but I have work. Help our family organize everything."
       ✅ Expected: a proposal card with **Confirm / Cancel**. ❌ If you see "AI is not configured", the key wasn't picked up — check the `.env` spelling and restart.
@@ -129,7 +129,7 @@ Common fixes:
 | `FRONTEND_URL` | Server | prod | ❌ | your Vercel URL |
 | `CORS_ORIGINS` | Server | prod | ❌ | your Vercel URL |
 | `GEMINI_API_KEY` | Server | for AI | ✅ | aistudio.google.com/apikey |
-| `GEMINI_MODEL` | Server | optional | ❌ | default `gemini-2.0-flash` |
+| `GEMINI_MODEL` | Server | optional | ❌ | default `gemini-3.8-flash` |
 | `LIVEKIT_URL` | Server | for calls | ❌ | cloud.livekit.io project |
 | `LIVEKIT_API_KEY` | Server | for calls | ✅ | cloud.livekit.io |
 | `LIVEKIT_API_SECRET` | Server | for calls | ✅ | cloud.livekit.io |
