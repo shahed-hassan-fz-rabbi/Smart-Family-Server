@@ -1,0 +1,57 @@
+import { Schema, model, Document, Types } from 'mongoose';
+
+export type FamilyRole = 'owner' | 'admin' | 'member';
+
+export interface IUser extends Document<Types.ObjectId> {
+  name: string;
+  email: string;
+  passwordHash: string;
+  avatarUrl?: string;
+  preferredLanguage: 'en' | 'bn' | 'banglish';
+  timezone: string;
+  privacy: {
+    shareUpdatesWithFamily: boolean;
+    shareCalendarWithFamily: boolean;
+    locationSharingOptIn: boolean;
+    aiFamilyContextAllowed: boolean;
+  };
+  notificationPrefs: {
+    inApp: boolean;
+    emailEnabled: boolean;
+  };
+  lastSeenAt?: Date;
+  deletedAt?: Date;
+}
+
+const userSchema = new Schema<IUser>(
+  {
+    name: { type: String, required: true, trim: true, maxlength: 80 },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
+    passwordHash: { type: String, required: true },
+    avatarUrl: { type: String },
+    preferredLanguage: { type: String, enum: ['en', 'bn', 'banglish'], default: 'en' },
+    timezone: { type: String, default: 'UTC' },
+    privacy: {
+      shareUpdatesWithFamily: { type: Boolean, default: true },
+      shareCalendarWithFamily: { type: Boolean, default: true },
+      locationSharingOptIn: { type: Boolean, default: false },
+      aiFamilyContextAllowed: { type: Boolean, default: true },
+    },
+    notificationPrefs: {
+      inApp: { type: Boolean, default: true },
+      emailEnabled: { type: Boolean, default: false },
+    },
+    lastSeenAt: { type: Date },
+    deletedAt: { type: Date, default: null },
+  },
+  { timestamps: true },
+);
+
+export const User = model<IUser>('User', userSchema);
