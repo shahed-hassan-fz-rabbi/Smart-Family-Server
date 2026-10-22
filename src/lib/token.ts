@@ -4,10 +4,12 @@ import { config } from '../config/env';
 export interface JwtPayload {
   sub: string;
   email: string;
+  /** Session-invalidations counter of the user at signing time. */
+  tv: number;
 }
 
-export function signSessionToken(userId: string, email: string): string {
-  return jwt.sign({ sub: userId, email }, config.jwt.secret, {
+export function signSessionToken(userId: string, email: string, tokenVersion: number): string {
+  return jwt.sign({ sub: userId, email, tv: tokenVersion }, config.jwt.secret, {
     expiresIn: `${config.jwt.expiresInDays}d`,
   });
 }
@@ -16,7 +18,9 @@ export function verifySessionToken(token: string): JwtPayload | null {
   try {
     const payload = jwt.verify(token, config.jwt.secret) as jwt.JwtPayload;
     if (!payload.sub) return null;
-    return { sub: String(payload.sub), email: String(payload.email ?? '') };
+    // Tokens signed before the tv field existed carry no claim — treated as
+    // version 0 so existing sessions stay valid until they are revoked.
+    return { sub: String(payload.sub), email: String(payload.email ?? ''), tv: Number(payload.tv ?? 0) };
   } catch {
     return null;
   }

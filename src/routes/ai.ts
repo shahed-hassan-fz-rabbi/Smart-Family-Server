@@ -205,14 +205,13 @@ aiRouter.post('/actions/:proposalId/confirm', async (req, res, next) => {
 
 aiRouter.post('/actions/:proposalId/cancel', async (req, res, next) => {
   try {
-    const proposal = await AIProposal.findOne({
-      _id: req.params.proposalId,
-      userId: req.user!.id,
-      status: 'pending',
-    });
-    if (!proposal) throw new HttpError(404, 'Proposal not found or already handled');
-    proposal.status = 'cancelled';
-    await proposal.save();
+    // Atomic cancel: racing confirm/cancel requests cannot both win.
+    const updated = await AIProposal.findOneAndUpdate(
+      { _id: req.params.proposalId, userId: req.user!.id, status: 'pending' },
+      { $set: { status: 'cancelled' } },
+      { new: true },
+    );
+    if (!updated) throw new HttpError(404, 'Proposal not found or already handled');
     res.json({ ok: true });
   } catch (err) {
     next(err);

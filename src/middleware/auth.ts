@@ -33,6 +33,13 @@ export async function requireAuth(req: AuthedRequest, res: Response, next: NextF
     return;
   }
 
+  // Session invalidation: a bump of the user's server-side counter (password
+  // reset, account deletion) instantly revokes every token signed earlier.
+  if (payload.tv !== user.tokenVersion) {
+    res.status(401).json({ error: 'Session expired. Please sign in again.' });
+    return;
+  }
+
   req.user = {
     id: user._id,
     email: user.email,

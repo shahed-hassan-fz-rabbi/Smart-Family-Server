@@ -8,6 +8,7 @@ import { validate } from '../middleware/validate';
 import { createCallSchema } from '../validators/safety';
 import { config } from '../config/env';
 import { createNotification } from '../services/notification';
+import { expireStaleRingingCalls } from '../services/callSweeper';
 import { emitToUsers } from '../lib/realtime';
 import { logger } from '../config/logger';
 
@@ -17,6 +18,10 @@ callsRouter.use(requireAuth);
 
 callsRouter.post('/', validate(createCallSchema), async (req, res, next) => {
   try {
+    // Expired rings become `missed` first, so the conflict check below is
+    // always evaluated against genuinely ringing sessions.
+    await expireStaleRingingCalls();
+
     const { familyId } = await requireFamilyMembership(req, req.body.familyId);
 
     if (req.body.conversationId) {
@@ -36,6 +41,22 @@ callsRouter.post('/', validate(createCallSchema), async (req, res, next) => {
     );
     void tokens;
 
+    // Lifecycle safety: a participant who is already being rung by another
+    // session must not get a second simultaneous incoming call.
+    const calleeIds = participants.filter((p) => p !== String(req.user!.id));
+    for (const calleeId of calleeIds) {
+      const clash = await CallSession.exists({
+        status: 'ringing',
+        participants: { $elemMatch: { userId: new Types.ObjectId(calleeId) } },
+      });
+      if (clash) {
+        throw new HttpError(
+          409,
+          'This person already has an incoming call ringing. Wait for that call to be answered or declined first.',
+        );
+      }
+    }
+
     const call = await CallSession.create({
       familyId,
       conversationId: req.body.conversationId,
@@ -45,7 +66,6 @@ callsRouter.post('/', validate(createCallSchema), async (req, res, next) => {
       participants: participants.map((id) => ({ userId: new Types.ObjectId(id) })),
     });
 
-    const calleeIds = participants.filter((p) => p !== String(req.user!.id));
     for (const calleeId of calleeIds) {
       await createNotification({
         userId: new Types.ObjectId(calleeId),
@@ -74,11 +94,21 @@ callsRouter.post('/', validate(createCallSchema), async (req, res, next) => {
 /** Issues a LiveKit room token after re-verifying membership. Honest errors when unconfigured. */
 callsRouter.get('/:callId/token', async (req, res, next) => {
   try {
+    // A ring nobody answered within its window must become `missed` before we
+    // decide whether a token can still be issued for it.
+    await expireStaleRingingCalls();
+
     const call = await CallSession.findById(req.params.callId);
     if (!call) throw new HttpError(404, 'Call not found');
     const { familyId } = await requireFamilyMembership(req, String(call.familyId));
     if (!call.participants.some((p) => p.userId.toString() === String(req.user!.id))) {
       throw new HttpError(403, 'You are not a participant of this call');
+    }
+
+    // Lifecycle safety: tokens are only valid for calls that can actually be
+    // joined — never for already ended, declined or missed sessions.
+    if (call.status !== 'ringing' && call.status !== 'active') {
+      throw new HttpError(410, 'This call has ended and can no longer be joined.');
     }
 
     if (!config.livekit.enabled) {
@@ -112,8 +142,10 @@ callsRouter.get('/:callId/token', async (req, res, next) => {
     if (participant && !participant.joinedAt) participant.joinedAt = new Date();
     await call.save();
 
+    // livekit-server-sdk v2.x: toJwt() is asynchronous — must be awaited,
+    // otherwise the Promise serializes as {} and the client cannot join.
     res.json({
-      token: token.toJwt(),
+      token: await token.toJwt(),
       url: config.livekit.url,
       room: roomName,
       mode: call.mode,

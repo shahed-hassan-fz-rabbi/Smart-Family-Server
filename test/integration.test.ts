@@ -471,6 +471,11 @@ describe('calling authorization', () => {
     const res = await request(app).get(`/api/calls/${call.body.call.id}/token`).set('Cookie', memberCookie);
     expect(res.status).toBe(503);
     expect(res.body.error).toBe('CALLING_NOT_CONFIGURED');
+
+    // Lifecycle safety (P1): decline this call so the next test's create does
+    // not collide with a still-ringing session for the same participants.
+    const dec = await request(app).post(`/api/calls/${call.body.call.id}/decline`).set('Cookie', memberCookie);
+    expect(dec.status).toBe(200);
   });
 
   it('rejects a non-participant requesting call tokens', async () => {

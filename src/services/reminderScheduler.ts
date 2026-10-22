@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { Types } from 'mongoose';
 import { Reminder } from '../models/reminder';
 import { createNotification } from './notification';
+import { expireStaleRingingCalls } from './callSweeper';
 import { emitToUsers } from '../lib/realtime';
 import { FamilyMembership } from '../models/family';
 import { logger } from '../config/logger';
@@ -22,8 +23,14 @@ export function startReminderScheduler(): void {
 
   cron.schedule('* * * * *', () => {
     void processDueReminders();
+    // Reliability sweep: unanswered calls age into `missed` even when nobody
+    // is currently hitting the call routes.
+    void expireStaleRingingCalls();
   });
   logger.info('Reminder scheduler started (every minute, in-process)');
+
+  // Clean up calls that went stale while the server was down.
+  void expireStaleRingingCalls();
 }
 
 export async function processDueReminders(): Promise<number> {

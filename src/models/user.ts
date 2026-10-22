@@ -29,6 +29,12 @@ export interface IUser extends Document<Types.ObjectId> {
   };
   lastSeenAt?: Date;
   deletedAt?: Date;
+  /**
+   * Server-side session invalidation counter. Embedded as `tv` in every JWT
+   * and compared on every request; bumping it instantly kills all previously
+   * issued sessions for this user (e.g. after a password reset).
+   */
+  tokenVersion: number;
 }
 
 const userSchema = new Schema<IUser>(
@@ -62,6 +68,7 @@ const userSchema = new Schema<IUser>(
     },
     lastSeenAt: { type: Date },
     deletedAt: { type: Date, default: null },
+    tokenVersion: { type: Number, default: 0 },
   },
   { timestamps: true },
 );

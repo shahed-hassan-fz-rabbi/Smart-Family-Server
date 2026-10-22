@@ -9,6 +9,7 @@ export type NotificationType =
   | 'family_update'
   | 'chat_message'
   | 'call_incoming'
+  | 'call_missed'
   | 'system';
 
 export interface INotification extends Document<Types.ObjectId> {
@@ -30,7 +31,7 @@ const notificationSchema = new Schema<INotification>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     familyId: { type: Schema.Types.ObjectId, ref: 'Family', index: true },
-    type: { type: String, enum: ['task_assigned', 'task_completed', 'reminder_due', 'family_invitation', 'event_change', 'family_update', 'chat_message', 'call_incoming', 'system'], required: true },
+    type: { type: String, enum: ['task_assigned', 'task_completed', 'reminder_due', 'family_invitation', 'event_change', 'family_update', 'chat_message', 'call_incoming', 'call_missed', 'system'], required: true },
     title: { type: String, required: true, maxlength: 160 },
     message: { type: String, maxlength: 500 },
     linkPath: { type: String, maxlength: 240 },

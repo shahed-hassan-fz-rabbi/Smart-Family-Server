@@ -9,14 +9,16 @@ import { HttpError } from '../middleware/familyAccess';
 import { requireAuth } from '../middleware/auth';
 import { signSessionToken, verifySessionToken, SESSION_COOKIE_NAME, sessionCookieOptions } from '../lib/token';
 import { config } from '../config/env';
-import { PasswordResetToken, generateResetToken } from '../models/passwordReset';
+import { PasswordResetToken, generateResetToken, hashToken } from '../models/passwordReset';
 import { logger } from '../config/logger';
 
 export const authRouter = Router();
 
 const COOKIE_OPTS = sessionCookieOptions(config);
 
-function publicUser(u: {
+/** Whitelist of fields that may leave the server — everything absent (like
+ *  passwordHash) can never leak by accident. Fail-closed by design. */
+export function publicUser(u: {
   _id: unknown;
   name: string;
   email: string;
@@ -48,7 +50,7 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
     // Public registration can never create a platform administrator: the role
     // is explicitly pinned to 'user' (defense in depth beyond the schema default).
     const user = await User.create({ name: req.body.name, email: req.body.email, passwordHash, role: 'user' });
-    const token = signSessionToken(String(user._id), user.email);
+    const token = signSessionToken(String(user._id), user.email, user.tokenVersion);
     res
       .cookie(SESSION_COOKIE_NAME, token, COOKIE_OPTS)
       .status(201)
@@ -70,7 +72,7 @@ authRouter.post('/login', validate(loginSchema), async (req, res, next) => {
     const ok = await bcrypt.compare(req.body.password, user.passwordHash);
     if (!ok) throw invalid;
 
-    const token = signSessionToken(String(user._id), user.email);
+    const token = signSessionToken(String(user._id), user.email, user.tokenVersion);
     res.cookie(SESSION_COOKIE_NAME, token, COOKIE_OPTS).json({ user: publicUser(user) });
   } catch (err) {
     next(err);
@@ -97,31 +99,26 @@ authRouter.get('/me', requireAuth, async (req, res) => {
 
 authRouter.post('/forgot-password', validate(forgotPasswordSchema), async (req, res) => {
   const user = await User.findOne({ email: req.body.email.toLowerCase(), deletedAt: null });
-  if (!user) {
-    // Do not reveal whether the email exists.
-    res.json({ ok: true, message: 'If that email is registered, a reset link has been generated.' });
-    return;
+  if (user) {
+    const { raw } = await generateResetToken();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    await PasswordResetToken.create({ userId: user._id, tokenHash: hashToken(raw), expiresAt });
+    logger.info({ userId: String(user._id) }, 'Password reset token generated (out-of-band delivery; never sent over the API)');
   }
-  const { raw } = await generateResetToken();
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
-  await PasswordResetToken.create({ userId: user._id, tokenHash: raw, expiresAt });
-
-  // Email sending is NOT implemented. The token must be delivered out-of-band.
-  const devToken = config.env === 'production' ? undefined : raw;
-  logger.info({ userId: String(user._id) }, 'Password reset token generated (delivery out of band)');
+  // Uniform, honest response for known and unknown emails alike — whether the
+  // address exists is not revealed. The raw reset token is NEVER returned to
+  // the client in any environment; delivery is out of band by an administrator.
   res.json({
     ok: true,
     message:
-      'Email delivery is not configured on this server. Contact the family owner or admin to receive your reset token securely.' +
-      (devToken ? '' : ''),
-    ...(devToken ? { devToken } : {}),
+      'If that email is registered, a reset token has been generated and will be delivered securely by an administrator.',
   });
 });
 
 authRouter.post('/reset-password', validate(resetPasswordSchema), async (req, res, next) => {
   try {
     const record = await PasswordResetToken.findOne({
-      tokenHash: req.body.token,
+      tokenHash: hashToken(req.body.token),
       usedAt: null,
       expiresAt: { $gt: new Date() },
     });
@@ -132,6 +129,8 @@ authRouter.post('/reset-password', validate(resetPasswordSchema), async (req, re
     if (!user) throw new HttpError(400, 'Reset link is invalid or has expired');
 
     user.passwordHash = await bcrypt.hash(req.body.password, 12);
+    // A password reset revokes every session previously issued to this user.
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
     await user.save();
     record.usedAt = new Date();
     await record.save();
@@ -254,7 +253,7 @@ authRouter.get('/google/callback', async (req, res) => {
       }
     }
 
-    const token = signSessionToken(String(user._id), user.email);
+    const token = signSessionToken(String(user._id), user.email, user.tokenVersion);
     return res
       .cookie(SESSION_COOKIE_NAME, token, COOKIE_OPTS)
       .redirect(302, `${config.frontendUrl}/dashboard`);

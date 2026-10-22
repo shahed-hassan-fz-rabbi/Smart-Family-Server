@@ -30,7 +30,14 @@ export async function executeConfirmedProposal(
   proposalId: string,
   userId: Types.ObjectId,
 ): Promise<{ type: ProposalType; result: Record<string, unknown> }> {
-  const proposal = await AIProposal.findOne({ _id: proposalId, userId, status: 'pending' });
+  // Atomic claim: only ONE concurrent confirm can transition a proposal from
+  // 'pending' to 'confirmed'. A second racing request finds no pending row and
+  // can never double-execute the same action.
+  const proposal = await AIProposal.findOneAndUpdate(
+    { _id: proposalId, userId, status: 'pending' },
+    { $set: { status: 'confirmed' } },
+    { new: true },
+  );
   if (!proposal) {
     throw new HttpError(404, 'Proposal not found, already handled, or not yours');
   }

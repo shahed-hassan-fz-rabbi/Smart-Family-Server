@@ -18,6 +18,9 @@ import { Types } from 'mongoose';
  *   deliver events, typing indicators and presence.
  */
 const onlineUsers = new Set<string>();
+/** How many sockets (devices/tabs) each user currently has — an offline event
+ *  must only fire when the LAST session of a user goes away. */
+const sessionsByUser = new Map<string, number>();
 
 export function initSocket(httpServer: HttpServer): IOServer {
   const io = new IOServer(httpServer, {
@@ -53,6 +56,7 @@ export function initSocket(httpServer: HttpServer): IOServer {
     const userId = String(socket.data.userId);
     socket.join(`user:${userId}`);
     onlineUsers.add(userId);
+    sessionsByUser.set(userId, (sessionsByUser.get(userId) ?? 0) + 1);
 
     socket.on('conversation:join', async (conversationId: string, callback?: (ok: boolean | { error: string }) => void) => {
       try {
@@ -86,8 +90,24 @@ export function initSocket(httpServer: HttpServer): IOServer {
     });
 
     socket.on('disconnect', () => {
+      const remaining = (sessionsByUser.get(userId) ?? 1) - 1;
+      if (remaining > 0) {
+        sessionsByUser.set(userId, remaining);
+        return; // another device/tab of this user is still around
+      }
+      sessionsByUser.delete(userId);
       onlineUsers.delete(userId);
-      socket.broadcast.emit('presence:offline', { userId });
+
+      // Privacy-preserving presence: the offline event goes ONLY to the
+      // conversation rooms this socket actually joined — verified participants
+      // — never as a global broadcast (which previously leaked presence
+      // across unrelated families). The user's own session rooms (
+      // `user:<id>` / the socket's private room) are excluded.
+      for (const room of socket.rooms) {
+        if (room.startsWith('conversation:')) {
+          io.to(room).emit('presence:offline', { userId });
+        }
+      }
     });
   });
 

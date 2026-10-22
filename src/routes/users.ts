@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { updateProfileSchema } from '../validators/profile';
 import { HttpError } from '../middleware/familyAccess';
+import { publicUser } from './auth';
 
 export const usersRouter = Router();
 
@@ -30,16 +31,19 @@ usersRouter.patch('/me', validate(updateProfileSchema), async (req, res, next) =
     if (b.privacy) user.privacy = { ...user.privacy, ...b.privacy };
     if (b.notificationPrefs) user.notificationPrefs = { ...user.notificationPrefs, ...b.notificationPrefs };
     await user.save();
-    res.json({ user: user.toObject() });
+    // publicUser is the fail-closed whitelist serializer — passwordHash (and
+    // anything else sensitive) can never reach the client by accident.
+    res.json({ user: publicUser(user) });
   } catch (err) {
     next(err);
   }
 });
 
 // Account deletion is soft (data retained for audit); membership is removed.
+// The session counter is bumped so the deleted account's token stops working.
 usersRouter.delete('/me', async (req, res, next) => {
   try {
-    await User.updateOne({ _id: req.user!.id }, { $set: { deletedAt: new Date() } });
+    await User.updateOne({ _id: req.user!.id }, { $inc: { tokenVersion: 1 }, $set: { deletedAt: new Date() } });
     res.clearCookie('sf_token');
     res.json({ ok: true, message: 'Account deactivated. Contact your family owner to remove family memberships.' });
   } catch (err) {
