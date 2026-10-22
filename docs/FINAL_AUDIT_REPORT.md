@@ -104,3 +104,44 @@ Server: `src/config/env.ts` (model default), `test/integration.test.ts` (env iso
 `.env.example` + `README.md` + `docs/DEPLOYMENT.md` + `docs/MY_MANUAL_ACTIONS.md` (model name).
 Client: `src/app/(app)/layout.tsx` (BrandMark import).
 These must be committed and pushed before Render/Vercel will pick them up.
+
+---
+
+## 9. Platform Super Admin system (added 2026-10-20, verified with real runs)
+
+**Verified by real execution:**
+- \
+px vitest run\ ? **75/75 passed (57 previous + 18 new platform-admin security tests)**; \	sc\ exit 0; production build exit 0; boot smoke PASSED.
+- Real E2E vs the live local backend + real database: secure bootstrap script promoted exactly one
+  test admin (audit entry \platform.admin.promoted\ written); admin APIs returned real metrics
+  (\overview users=4 admins=1\); \uth/me\ role = \super_admin\; users list contains **no password
+  fields**; a normal member calling \/api/admin/*\ was blocked; client \	sc\ + \
+ext build\ (35 pages) clean.
+- After verification the TEST admin was returned to \ole: "user"\ through a scripted, audited
+  cleanup (\platform.admin.devCleanupDemoted\) so no weak-password privileged account remains.
+
+**Design (least privilege everywhere):**
+- \equireAuth\ loads the fresh user per request; suspension refuses access instantly (401) on every API.
+- \equireSuperAdmin\ re-checks the role and 403s with a generic message; admin routes are additionally rate-limited (60/min).
+- Public signup, Google OAuth, and profile update paths pin \ole: "user"\ explicitly — no escalation vector.
+- Super-admin accounts cannot be suspended (403) — no accidental removal of the last platform administrator is possible.
+- Audit log is append-only; privileged audit writes fail loudly (they cannot be silently skipped), while non-privileged helper writes never break user flows.
+- Admin APIs return aggregates/identifiers only — never family messages, calendars, or any private content.
+- First admin: \scripts/create-super-admin.mjs\ (requires private \ADMIN_BOOTSTRAP_TOKEN\ = 32 chars, never via argv; promotes an existing account only; idempotent; audits itself).
+- Frontend: \(admin)\ route group shows an honest "Not authorized"/"Sign in" state for non-admins; middleware adds cookie-gating for \/admin\ (real authorization remains server-side).
+
+**Logo integration (official asset, untouched):**
+- \public/smartfamily logo.png\ (PNG 561x445, transparent corners — verified via pixel alpha check) is used in:
+  marketing navbar/footer (\BrandMark\), auth screens (\AuthShell\), family dashboard topbar +
+  loading, Platform Admin sidebar + loading, and as the favicon (\metadata.icons\ ?
+  \/smartfamily%20logo.png\). Browser-verified: logo loads at full resolution on \/\ and \/login\
+  in both themes; no recoloring/renaming; aspect ratio preserved.
+
+**Honest limitations:**
+- No end-user reporting/moderation system exists in the backend, so the admin dashboard shows an
+  honest empty state at \(admin)/admin/reports\ rather than mock data.
+- Admin page-middleware performs a cookie-presence gate only (same as all app pages); the page
+  shell may render for non-admins but every privileged API call is refused server-side, and the UI
+  shows the honest unauthorized state.
+- The seeded test-admin audit rows remain in the audit trail for transparency (they are audit-col
+  entries only, never user data).

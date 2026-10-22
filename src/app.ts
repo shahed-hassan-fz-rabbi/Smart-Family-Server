@@ -19,6 +19,7 @@ import { conversationsRouter } from './routes/conversations';
 import { callsRouter } from './routes/calls';
 import { safetyRouter } from './routes/safety';
 import { logger } from './config/logger';
+import { adminRouter } from './routes/admin';
 
 export function createApp(): Express {
   const app = express();
@@ -92,6 +93,18 @@ export function createApp(): Express {
   app.use('/api/ai', aiRouter);
   app.use('/api/conversations', conversationsRouter);
   app.use('/api/calls', callsRouter);
+  // Privileged platform routes: stricter limiter + router itself enforces the
+  // super-admin role server-side (never trust the frontend for authorization).
+  app.use(
+    '/api/admin',
+    rateLimit({
+      windowMs: 60 * 1000,
+      limit: 60,
+      standardHeaders: 'draft-7',
+      legacyHeaders: false,
+    }),
+    adminRouter,
+  );
   app.use('/api', safetyRouter); // mounted at root for family-scoped safety endpoints
 
   app.use('/api', (_req, res) => {

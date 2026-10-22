@@ -1,12 +1,20 @@
 import { Schema, model, Document, Types } from 'mongoose';
 
 export type FamilyRole = 'owner' | 'admin' | 'member';
+/** Platform-level role, fully independent of family roles. */
+export type PlatformRole = 'user' | 'super_admin';
 
 export interface IUser extends Document<Types.ObjectId> {
   name: string;
   email: string;
   passwordHash: string;
   avatarUrl?: string;
+  /** Platform privilege. Only the secure bootstrap script may ever set 'super_admin'. */
+  role: PlatformRole;
+  /** Suspension (account-level, reversible). Suspended users fail requireAuth. */
+  suspendedAt?: Date | null;
+  suspendReason?: string;
+  suspendedBy?: Types.ObjectId;
   preferredLanguage: 'en' | 'bn' | 'banglish';
   timezone: string;
   privacy: {
@@ -36,6 +44,10 @@ const userSchema = new Schema<IUser>(
     },
     passwordHash: { type: String, required: true },
     avatarUrl: { type: String },
+    role: { type: String, enum: ['user', 'super_admin'], default: 'user', index: true },
+    suspendedAt: { type: Date, default: null },
+    suspendReason: { type: String, maxlength: 300 },
+    suspendedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     preferredLanguage: { type: String, enum: ['en', 'bn', 'banglish'], default: 'en' },
     timezone: { type: String, default: 'UTC' },
     privacy: {

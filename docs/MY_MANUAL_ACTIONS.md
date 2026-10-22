@@ -137,3 +137,23 @@ Common fixes:
 | `GOOGLE_CLIENT_SECRET` | Server | optional | ‚úÖ | console.cloud.google.com |
 | `NEXT_PUBLIC_API_URL` | Client | ‚úÖ | ‚ùå | your Render URL + `/api` |
 | `NEXT_PUBLIC_LIVEKIT_URL` | Client | optional | ‚ùå | LiveKit wss URL |
+
+---
+
+## Phase 8 ó Platform Super Admin bootstrap (one per platform)
+
+The Super Admin role is NEVER granted by signup or Google sign-in. Only this
+secure server-side script can promote an admin (audited, idempotent):
+
+1. Set ADMIN_BOOTSTRAP_TOKEN as a PRIVATE env var (32+ random chars) ó locally
+   in .env and later on Render (Environment ? Add, sync:false).
+2. Register the future admin account through the normal app (signup page).
+3. Run locally: ADMIN_BOOTSTRAP_TOKEN=<token> node scripts/create-super-admin.mjs --email <their-email> --confirm
+   (on Render: use the dashboard **Shell**, keep 
+pm ci && npm run build as build command).
+4. The promoted admin signs in at the app and opens /admin.
+5. Rotation/backup: promote a SECOND admin through the same script, then they
+   can manage any future handover (demoting existing admins is intentionally
+   unavailable ó least privilege).
+
+See docs/FINAL_AUDIT_REPORT.md + Platform Admin section in README.

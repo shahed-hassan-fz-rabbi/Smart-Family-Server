@@ -24,11 +24,13 @@ function publicUser(u: {
   timezone: string;
   privacy: unknown;
   notificationPrefs: unknown;
+  role?: string;
 }) {
   return {
     id: String(u._id),
     name: u.name,
     email: u.email,
+    role: (u.role === 'super_admin' ? 'super_admin' : 'user') as 'super_admin' | 'user',
     preferredLanguage: u.preferredLanguage,
     timezone: u.timezone,
     privacy: u.privacy,
@@ -43,7 +45,9 @@ authRouter.post('/register', validate(registerSchema), async (req, res, next) =>
       throw new HttpError(409, 'An account with this email already exists');
     }
     const passwordHash = await bcrypt.hash(req.body.password, 12);
-    const user = await User.create({ name: req.body.name, email: req.body.email, passwordHash });
+    // Public registration can never create a platform administrator: the role
+    // is explicitly pinned to 'user' (defense in depth beyond the schema default).
+    const user = await User.create({ name: req.body.name, email: req.body.email, passwordHash, role: 'user' });
     const token = signSessionToken(String(user._id), user.email);
     res
       .cookie(SESSION_COOKIE_NAME, token, COOKIE_OPTS)
@@ -82,6 +86,10 @@ authRouter.get('/me', requireAuth, async (req, res) => {
   const user = await User.findById(req.user!.id);
   if (!user) {
     res.status(404).json({ error: 'Account not found' });
+    return;
+  }
+  if (user.suspendedAt) {
+    res.status(401).json({ error: 'Account suspended' });
     return;
   }
   res.json({ user: publicUser(user) });
@@ -236,6 +244,7 @@ authRouter.get('/google/callback', async (req, res) => {
         name: profile.name?.trim() || profile.email.split('@')[0],
         email: profile.email.toLowerCase(),
         passwordHash: UNUSABLE_PASSWORD_HASH,
+        role: 'user',
       });
     } else if (user.name !== profile.name && (profile.name ?? '').trim().length > 0) {
       // Keep the locally chosen name unless Google only now provided one.

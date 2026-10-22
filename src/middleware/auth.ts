@@ -26,10 +26,18 @@ export async function requireAuth(req: AuthedRequest, res: Response, next: NextF
     return;
   }
 
+  // Suspension takes effect immediately on every request because the fresh
+  // record is loaded above (the session token itself carries no role).
+  if (user.suspendedAt) {
+    res.status(401).json({ error: 'Account suspended' });
+    return;
+  }
+
   req.user = {
     id: user._id,
     email: user.email,
     name: user.name,
+    role: user.role,
     preferredLanguage: user.preferredLanguage,
     timezone: user.timezone,
   };
@@ -49,4 +57,21 @@ const ROLE_RANK: Record<FamilyRole, number> = { member: 1, admin: 2, owner: 3 };
 
 export function roleAtLeast(role: FamilyRole, min: FamilyRole): boolean {
   return ROLE_RANK[role] >= ROLE_RANK[min];
+}
+
+/**
+ * Requires a platform super admin. The role check uses the fresh DB-backed
+ * user attached by requireAuth, so a demoted or suspended admin loses access
+ * immediately — never trust a stale token claim.
+ */
+export function requireSuperAdmin(
+  req: AuthedRequest,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (req.user?.role !== 'super_admin') {
+    res.status(403).json({ error: 'Platform administrator access required' });
+    return;
+  }
+  next();
 }

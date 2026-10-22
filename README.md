@@ -165,3 +165,31 @@ See `render.yaml` and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Briefly:
 ## Future improvements
 
 Email delivery (e.g. Resend), push notifications, Redis-backed socket adapter + multi-instance scheduler lock, attachments in chats with malware scanning, AI conversation summarization, i18n for non-assistant UI copy.
+
+## Platform Super Admin (built-in)
+
+Three separate role layers exist:
+
+1. **Platform Super Admin** — manages the whole platform (/admin dashboard).
+2. **Family Owner/Admin** — manages only their own family (existing roles).
+3. **Regular Family Member** — permitted family features.
+
+Enforced **server-side** on every request (equireAuth + equireSuperAdmin);
+the UI is convenience only. Super Admin **cannot be granted by public signup or
+Google sign-in**. Suspension blocks a user on every API call immediately.
+Super-admin accounts can never be suspended from the dashboard (last-admin
+protection by construction).
+
+### Bootstrapping the first Super Admin (secure, audited)
+
+\\\ash
+# 1. set a private 32+ char token (env var / Render "Environment"), then:
+ADMIN_BOOTSTRAP_TOKEN=<token> node --env-file=.env scripts/create-super-admin.mjs --email <registered-email> --confirm
+\\\
+
+The script only **promotes an existing registered account** (it never creates an
+account or sets a password), is idempotent, refuses suspended accounts, and
+writes an immutable audit entry. There is intentionally no demote command —
+promote a second admin first, then hand over. Run \
+pm test\ for the
+\	est/platform-admin.test.ts\ security suite.
