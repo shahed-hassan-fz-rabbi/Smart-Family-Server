@@ -293,43 +293,47 @@ describe('Fix 3 — presence events stay inside joined conversation rooms', () =
     const sockA = await connectSocket(ownerCookie);
     const sockB = await connectSocket(calleeCookie);
     const sockC = await connectSocket(outsiderCookie);
+    try {
+      const events: Record<'A' | 'B' | 'C', string[]> = { A: [], B: [], C: [] };
+      sockA.on('presence:online', (m) => events.A.push(`online:${m?.userId}`));
+      sockA.on('presence:offline', (m) => events.A.push(`offline:${m?.userId}`));
+      sockB.on('presence:online', (m) => events.B.push(`online:${m?.userId}`));
+      sockC.on('presence:online', (m) => events.C.push(`online:${m?.userId}`));
+      sockC.on('presence:offline', (m) => events.C.push(`offline:${m?.userId}`));
 
-    const events: Record<'A' | 'B' | 'C', string[]> = { A: [], B: [], C: [] };
-    sockA.on('presence:online', (m) => events.A.push(`online:${m?.userId}`));
-    sockA.on('presence:offline', (m) => events.A.push(`offline:${m?.userId}`));
-    sockB.on('presence:online', (m) => events.B.push(`online:${m?.userId}`));
-    sockC.on('presence:online', (m) => events.C.push(`online:${m?.userId}`));
-    sockC.on('presence:offline', (m) => events.C.push(`offline:${m?.userId}`));
+      await joinConversation(sockA, conversationId);
+      await joinConversation(sockC, strangerConversationId); // unrelated family/user
+      await joinConversation(sockB, conversationId);
 
-    await joinConversation(sockA, conversationId);
-    await joinConversation(sockC, strangerConversationId); // unrelated family/user
-    await joinConversation(sockB, conversationId);
+      // A shares the conversation with B → must see B come online.
+      expect(events.A).toContain(`online:${calleeId}`);
+      // C is in an unrelated conversation → must see nothing from A or B.
+      expect(events.C).toEqual([]);
 
-    // A shares the conversation with B → must see B come online.
-    expect(events.A).toContain(`online:${calleeId}`);
-    // C is in an unrelated conversation → must see nothing from A or B.
-    expect(events.C).toEqual([]);
-
-    const offlineSeen = new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(events.A.includes(`offline:${calleeId}`)), 4000);
-      sockA.on('presence:offline', (m) => {
-        if (m?.userId === calleeId) {
-          clearTimeout(timer);
-          resolve(true);
-        }
+      const offlineSeen = new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(events.A.includes(`offline:${calleeId}`)), 4000);
+        sockA.on('presence:offline', (m) => {
+          if (m?.userId === calleeId) {
+            clearTimeout(timer);
+            resolve(true);
+          }
+        });
       });
-    });
 
-    sockB.disconnect(); // last session of B → offline inside its rooms only
-    expect(await offlineSeen).toBe(true);
+      sockB.disconnect(); // last session of B → offline inside its rooms only
+      expect(await offlineSeen).toBe(true);
 
-    // Give the (non-)leak to C a moment to manifest, then assert absence.
-    await new Promise((r) => setTimeout(r, 1200));
-    expect(events.C).toEqual([]);
-    expect(events.A.some((e) => e.startsWith('offline:'))).toBe(true);
-
-    sockA.disconnect();
-    sockC.disconnect();
+      // Give the (non-)leak to C a moment to manifest, then assert absence.
+      await new Promise((r) => setTimeout(r, 1200));
+      expect(events.C).toEqual([]);
+      expect(events.A.some((e) => e.startsWith('offline:'))).toBe(true);
+    } finally {
+      // Always clean up: leaving sockets connected would keep the process alive.
+      sockA.disconnect();
+      sockB.disconnect();
+      sockC.disconnect();
+      await new Promise((r) => setTimeout(r, 300));
+    }
   });
 });
 

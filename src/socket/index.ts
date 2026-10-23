@@ -89,10 +89,15 @@ export function initSocket(httpServer: HttpServer): IOServer {
       socket.to(`conversation:${conversationId}`).emit('chat:typing', { userId, name: socket.data.name ?? userId });
     });
 
-    socket.on('disconnect', () => {
+    // Use `disconnecting` (not `disconnect`): by the time `disconnect` fires,
+    // Socket.IO has already removed the socket from its rooms — we still need
+    // the joined conversation list for the privacy-preserving presence emit.
+    socket.on('disconnecting', () => {
+      const joinedRooms = Array.from(socket.rooms).filter((r) => r.startsWith('conversation:'));
       const remaining = (sessionsByUser.get(userId) ?? 1) - 1;
       if (remaining > 0) {
         sessionsByUser.set(userId, remaining);
+        void joinedRooms;
         return; // another device/tab of this user is still around
       }
       sessionsByUser.delete(userId);
@@ -101,12 +106,9 @@ export function initSocket(httpServer: HttpServer): IOServer {
       // Privacy-preserving presence: the offline event goes ONLY to the
       // conversation rooms this socket actually joined — verified participants
       // — never as a global broadcast (which previously leaked presence
-      // across unrelated families). The user's own session rooms (
-      // `user:<id>` / the socket's private room) are excluded.
-      for (const room of socket.rooms) {
-        if (room.startsWith('conversation:')) {
-          io.to(room).emit('presence:offline', { userId });
-        }
+      // across unrelated families).
+      for (const room of joinedRooms) {
+        io.to(room).emit('presence:offline', { userId });
       }
     });
   });
