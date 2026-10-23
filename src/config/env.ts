@@ -26,7 +26,38 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 });
 
-const parsed = envSchema.safeParse(process.env);
+/** True for loopback/dev URLs that must never be used as an external address in production. */
+export function isLocalhostishUrl(value: string): boolean {
+  return /localhost|127\.0\.0\.1|::1|\[::1\]/i.test(value);
+}
+
+const parsed = envSchema
+  .superRefine((data, ctx) => {
+  // In production, silently falling back to localhost breaks OAuth redirects
+  // and CORS in ways that only surface when a user clicks "Login". Fail at
+  // boot with the exact fix instead.
+  if (data.NODE_ENV !== 'production') return;
+  const checks: Array<[string, string, string]> = [
+    ['FRONTEND_URL', data.FRONTEND_URL, 'set it to your deployed frontend, e.g. https://smart-family-client.vercel.app'],
+    ['GOOGLE_REDIRECT_URI', data.GOOGLE_REDIRECT_URI ?? '', 'set it to the full https callback URL registered in Google Cloud Console'],
+  ];
+  for (const [field, value, fix] of checks) {
+    if (!value) continue; // FRONTEND_URL always has a value; GOOGLE_REDIRECT_URI is optional
+    if (isLocalhostishUrl(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `${field} points to localhost, which is unreachable in a production deployment — ${fix}`,
+      });
+    } else if (!value.startsWith('https://')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `${field} must start with https:// in production — ${fix}`,
+      });
+    }
+  }
+}).safeParse(process.env);
 
 if (!parsed.success) {
   // Surface a precise startup failure instead of a runtime crash later.
@@ -62,6 +93,11 @@ export const config = {
   google: {
     clientId: env.GOOGLE_CLIENT_ID ?? '',
     clientSecret: env.GOOGLE_CLIENT_SECRET ?? '',
+    // Explicit callback override (GOOGLE_REDIRECT_URI) or "<request origin>" —
+    // the value MUST exactly match one of the URIs registered in Google Cloud
+    // Console, and must be identical in both the authorize step and the token
+    // exchange step.
+    redirectUri: env.GOOGLE_REDIRECT_URI ?? '',
     enabled: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
   },
   livekit: {

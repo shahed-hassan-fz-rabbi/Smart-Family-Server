@@ -31,7 +31,17 @@ export const SESSION_COOKIE_NAME = 'sf_token';
 export const sessionCookieOptions = (cfg: typeof config) => ({
   httpOnly: true as const,
   secure: cfg.isProd,
-  sameSite: 'lax' as const,
+  /**
+   * In production the frontend (vercel.app) and backend (onrender.com) are
+   * different registrable domains, i.e. a CROSS-SITE context: SameSite=Lax
+   * cookies are never attached to the frontend's fetch() calls, so every
+   * authenticated request would 401 right after a successful login. The
+   * standard, non-weakening policy for a cross-origin session cookie is
+   * SameSite=None with Secure (both are kept: httpOnly stays, tokens remain
+   * revocable via tokenVersion, and CSRF state cookies stay Lax). Dev stays
+   * Lax (localhost is a single-site context there).
+   */
+  sameSite: (cfg.isProd ? 'none' : 'lax') as 'none' | 'lax',
   maxAge: cfg.jwt.expiresInDays * 24 * 60 * 60 * 1000,
   path: '/',
 });

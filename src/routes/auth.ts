@@ -163,15 +163,29 @@ authRouter.get('/providers', (_req, res) => {
   res.json({ google: config.google.enabled });
 });
 
+/**
+ * The redirect_uri sent to Google during authorization must be byte-for-byte
+ * IDENTICAL to the one used in the token exchange, and must match a URI
+ * registered in Google Cloud Console. Prefer the explicit GOOGLE_REDIRECT_URI
+ * override (required when the server sits behind a proxy whose externally
+ * visible origin differs from the request host); otherwise derive it from the
+ * request host as before (trust proxy makes this https in production).
+ * The handler param is typed structurally to avoid clashing with the global
+ * fetch `Request` DOM type in this module.
+ */
+function resolveGoogleRedirectUri(req: { protocol: string; get(name: string): string | undefined }): string {
+  if (config.google.redirectUri) return config.google.redirectUri;
+  return `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
+}
+
 authRouter.get('/google', (req, res) => {
   if (!config.google.enabled) {
     return googleRedirect(res, 'not_configured');
   }
   const state = randomBytes(16).toString('hex');
-  const origin = `${req.protocol}://${req.get('host')}`;
   const params = new URLSearchParams({
     client_id: config.google.clientId,
-    redirect_uri: `${origin}/api/auth/google/callback`,
+    redirect_uri: resolveGoogleRedirectUri(req),
     response_type: 'code',
     scope: 'openid email profile',
     state,
@@ -198,7 +212,7 @@ authRouter.get('/google/callback', async (req, res) => {
       return googleRedirect(res, 'invalid_state');
     }
 
-    const origin = `${req.protocol}://${req.get('host')}`;
+    const redirectUri = resolveGoogleRedirectUri(req);
     const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -206,7 +220,7 @@ authRouter.get('/google/callback', async (req, res) => {
         code,
         client_id: config.google.clientId,
         client_secret: config.google.clientSecret,
-        redirect_uri: `${origin}/api/auth/google/callback`,
+        redirect_uri: redirectUri,
         grant_type: 'authorization_code',
       }),
     });
