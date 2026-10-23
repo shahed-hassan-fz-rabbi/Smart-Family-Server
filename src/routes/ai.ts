@@ -39,6 +39,9 @@ aiRouter.post('/conversations', validate(sendSchema), async (req, res, next) => 
         familyId: body.familyId ? new Types.ObjectId(body.familyId) : undefined,
         title: body.content.slice(0, 60),
       });
+      // Marked for best-effort cleanup if the turn fails — an empty stub would
+      // otherwise clutter the sidebar.
+      (req as { freshConversationId?: string }).freshConversationId = String(conversation._id);
     }
 
     // Family context only when the conversation is bound to a family the user belongs to.
@@ -124,6 +127,20 @@ aiRouter.post('/conversations', validate(sendSchema), async (req, res, next) => 
         : null,
     });
   } catch (err) {
+    // A failed turn that freshly created its conversation leaves an empty
+    // stub (the user's message is only persisted on success). Drop the stub
+    // so failed turns don't clutter the sidebar; retry recreates it. The
+    // $size:0 filter makes this safe: any conversation that actually got
+    // messages persisted is never deleted.
+    try {
+      const fresh = (req as { freshConversationId?: string }).freshConversationId;
+      if (fresh) {
+        await AIConversation.deleteOne({ _id: fresh, userId: req.user!.id, messages: { $size: 0 } });
+        delete (req as { freshConversationId?: string }).freshConversationId;
+      }
+    } catch {
+      // cleanup is best-effort; the original error still wins
+    }
     next(err);
   }
 });

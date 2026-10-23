@@ -1,12 +1,39 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, type GenerateContentParameters } from '@google/genai';
 import { config } from '../../config/env';
 import { HttpError } from '../../middleware/familyAccess';
 import { logger } from '../../config/logger';
 import { AiReply, aiReplySchema } from './schemas';
 import { FamilyContext, summarizeContextForLog } from './context';
 
-const AI_TIMEOUT_MS = 30_000;
-const MAX_RETRIES = 2;
+/**
+ * Provider latency right now is high (measured 2026-10-23: simple turns ~55s,
+ * family-context turns ~92s — and >120 s in demand spikes, while
+ * `gemini-3.5-flash` answered in ~2 s during the same burst). The old 30 s cap
+ * expired before Gemini ever answered. Supported models are verified against
+ * ListModels, so the time/fallback policy is the knob — not the model name.
+ */
+const AI_TIMEOUT_MS = 120_000; // per attempt
+const MAX_TOTAL_BUDGET_MS = 300_000; // hard wall-clock cap for the whole turn
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+/** Retry ceilings per failure class; timeouts only get ONE retry because a
+ *  second 120s attempt doubles an already long wait. */
+const MAX_RETRIES: Record<ProviderErrorKind, number> = {
+  transient: 2,
+  timeout: 1,
+  malformed: 2,
+  fatal: 0,
+};
+type ProviderErrorKind = 'transient' | 'timeout' | 'malformed' | 'fatal';
+
+/**
+ * Demand-spike fallback. `gemini-3.8-flash` (primary, set via GEMINI_MODEL)
+ * is verified valid but occasionally saturates for minutes at a time while
+ * `gemini-3.5-flash` keeps answering. If the primary's bounded retries are
+ * exhausted for a retryable reason, the turn switches models once instead of
+ * failing. Fatal errors (bad key / bad model config) never switch — they need
+ * an administrator, not a different model.
+ */
+const FALLBACK_MODEL = 'gemini-3.5-flash';
 
 let client: GoogleGenAI | null = null;
 
@@ -71,6 +98,17 @@ export interface GeminiTurn {
   content: string;
 }
 
+/** Internal: a model exhausted its (bounded) retryable attempts and the turn
+ *  should either switch to the fallback model or terminate honestly. */
+class SwitchSignal extends Error {
+  constructor(
+    public readonly info: { kind: ProviderErrorKind; status?: number; retryAfterMs?: number },
+    public readonly lastErr: unknown,
+  ) {
+    super('model candidates exhausted');
+  }
+}
+
 /**
  * Sends a conversation turn to Gemini and returns a validated structured reply.
  * Throws honest errors — never fabricates responses on provider failure.
@@ -96,12 +134,46 @@ export async function askGemini(
     { role: 'user', parts: [{ text: userMessage }] },
   ];
 
-  let lastError: unknown = null;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  const startedAt = Date.now();
+  const candidates = [...new Set([config.gemini.model, FALLBACK_MODEL])];
+
+  for (let mi = 0; mi < candidates.length; mi++) {
+    const model = candidates[mi];
+    if (mi > 0 && Date.now() - startedAt > MAX_TOTAL_BUDGET_MS) break;
+    if (mi > 0) {
+      logger.warn({ from: candidates[mi - 1], to: model, elapsedMs: Date.now() - startedAt }, 'Switching Gemini model after repeated failures');
+    }
+    try {
+      return await runModelTurn(genai, model, contents, ctx, startedAt);
+    } catch (err) {
+      if (err instanceof SwitchSignal) {
+        const canSwitch =
+          mi + 1 < candidates.length &&
+          Date.now() - startedAt <= MAX_TOTAL_BUDGET_MS;
+        if (canSwitch) continue;
+        throw terminalAiError(err.info, err.lastErr);
+      }
+      throw err; // already-final honest HttpError (fatal misconfig, etc.)
+    }
+  }
+  logger.error({ models: candidates }, 'Gemini unavailable within budget');
+  throw new HttpError(502, 'The AI service is temporarily unavailable. Please try again in a moment.');
+}
+
+async function runModelTurn(
+  genai: GoogleGenAI,
+  model: string,
+  contents: GenerateContentParameters['contents'],
+  ctx: FamilyContext,
+  startedAt: number,
+): Promise<AiReply> {
+  const retries = { transient: 0, timeout: 0, malformed: 0, fatal: 0 };
+
+  for (let attempt = 0; ; attempt++) {
     try {
       const response = await withTimeout(
         genai.models.generateContent({
-          model: config.gemini.model,
+          model,
           contents,
           config: {
             systemInstruction: buildSystemInstruction(ctx),
@@ -114,31 +186,151 @@ export async function askGemini(
       );
 
       const raw = response.text ?? '';
-      const parsed = parseModelJson(raw);
+      const parsed = parseProviderJson(raw);
       const validated = aiReplySchema.safeParse(parsed);
       if (!validated.success) {
         logger.warn({ issues: validated.error.issues.length, preview: raw.slice(0, 400) }, 'AI reply failed schema validation');
-        // Retry once handled by loop; if final attempt, surface honest error.
-        lastError = validated.error;
-        continue;
+        throw new ProviderResponseError('schema', new Error('AI reply failed schema validation'));
       }
       logger.debug(summarizeContextForLog(ctx), 'AI turn completed');
       return validated.data;
     } catch (err) {
-      lastError = err;
-      logger.warn({ attempt, error: (err as Error)?.message }, 'Gemini request failed');
-      if (attempt < MAX_RETRIES) {
-        await sleep(400 * (attempt + 1));
+      const info = classifyProviderError(err);
+      retries[info.kind] += 1;
+      logger.warn(
+        { model, attempt, kind: info.kind, status: info.status ?? null, elapsedMs: Date.now() - startedAt },
+        'Gemini request failed',
+      );
+
+      // Provider contract flip: only fail fast on errors retrying can never fix.
+      const canRetry =
+        retries[info.kind] <= MAX_RETRIES[info.kind] &&
+        Date.now() - startedAt + AI_TIMEOUT_MS <= MAX_TOTAL_BUDGET_MS;
+      if (!canRetry) {
+        if (info.kind === 'fatal') throw terminalAiError(info, err);
+        throw new SwitchSignal(info, err);
       }
+
+      // Bounded backoff honoring the provider's Retry-After guidance when present.
+      const delay = providerBackoffMs(info, retries[info.kind]);
+      if (delay > 0) await sleep(delay);
     }
   }
+}
 
-  if (lastError instanceof HttpError) throw lastError;
-  logger.error({ err: lastError }, 'Gemini unavailable after retries');
-  throw new HttpError(
-    502,
-    'The AI service is temporarily unavailable. Please try again in a moment.',
-  );
+/* ---------------------------------------------------------------------------
+ * Provider error taxonomy (pure functions — unit-tested). Retry only what a
+ * retry can fix: 429/5xx capacity blips, a slow attempt, and malformed model
+ * output. Authentication/billing/invalid-request errors fail immediately with
+ * an honest message that never leaks provider internals.
+ * ------------------------------------------------------------------------- */
+export function classifyProviderError(err: unknown): {
+  kind: ProviderErrorKind;
+  status?: number;
+  retryAfterMs?: number;
+} {
+  // Our own timeout wrapper — a slow attempt is retryable exactly once.
+  if (err instanceof Error && /^AI request timed out after \d+ms$/.test(err.message)) {
+    return { kind: 'timeout' };
+  }
+  // parse errors and schema validation failures inside the turn.
+  if (err instanceof ProviderResponseError) {
+    return { kind: 'malformed' };
+  }
+
+  const status =
+    (typeof (err as { status?: unknown })?.status === 'number' ? ((err as { status: number }).status) : undefined) ??
+    extractStatusFromMessage((err as Error)?.message ?? '');
+  const retryAfterMs = extractRetryAfterMs(err);
+
+  if (status && RETRYABLE_STATUS.has(status)) return { kind: 'transient', status, retryAfterMs };
+  // "overloaded"/"high demand" bodies sometimes arrive as 500-shaped text.
+  if (!status && /overloaded|high demand|temporarily unavailable/i.test((err as Error)?.message ?? '')) {
+    return { kind: 'transient', retryAfterMs };
+  }
+  // Configuration/auth problems sometimes arrive without a numeric status
+  // (e.g. "API key not valid") — never retry these; they cannot heal.
+  const message = (err as Error)?.message ?? '';
+  if (/\bapi[_ -]?key\b|api_key_invalid|permission denied|billing|invalid model/i.test(message)) {
+    return { kind: 'fatal', status };
+  }
+  if (status && status >= 400 && status < 500) {
+    return { kind: 'fatal', status };
+  }
+  return { kind: 'transient', status, retryAfterMs };
+}
+
+/** Exponential with cap, honoring Retry-After when the provider supplied one. */
+export function providerBackoffMs(
+  info: { kind: ProviderErrorKind; retryAfterMs?: number },
+  retryCount: number,
+): number {
+  if (info.kind === 'timeout') return 800; // small settle pause for a slow attempt
+  if (info.kind === 'fatal') return 0;
+  if (info.retryAfterMs && info.retryAfterMs > 0) return Math.min(info.retryAfterMs, 15_000);
+  return Math.min(1000 * 2 ** (retryCount - 1), 8_000);
+}
+
+function terminalAiError(
+  info: { kind: ProviderErrorKind; status?: number },
+  lastErr: unknown,
+): never {
+  if (info.kind === 'timeout') {
+    throw new HttpError(504, 'The model is taking longer than usual right now. Please try again in a moment.');
+  }
+  if (info.kind === 'fatal') {
+    logger.error({ status: info.status ?? null }, 'Gemini configuration or request error (not retried)');
+    throw new HttpError(
+      500,
+      'The AI assistant is misconfigured on this server (check GEMINI_API_KEY and GEMINI_MODEL). Ask the server administrator to fix the configuration.',
+    );
+  }
+  if (info.kind === 'malformed' && lastErr instanceof HttpError) {
+    // parseModelJson already produced an accurate, safe user-facing message
+    // ("empty response" / "could not interpret safely") — keep it, no retry.
+    throw lastErr;
+  }
+  if (info.kind === 'malformed') {
+    throw new HttpError(502, 'The AI returned a reply we could not structure safely. Please try again.');
+  }
+  logger.error({ status: info.status ?? null }, 'Gemini unavailable after retries');
+  throw new HttpError(502, 'The AI service is temporarily unavailable. Please try again in a moment.');
+}
+
+/** The SDK sometimes embeds the provider JSON error inside its own message. */
+function extractStatusFromMessage(message: string): number | undefined {
+  const codeFromJson = /\{"error":\{(?:[^}]*?)"code":(\d{3})/.exec(message)?.[1];
+  if (codeFromJson) return Number(codeFromJson);
+  const bare = /(?:^|[^0-9])(429|500|502|503|504)(?:[^0-9]|$)/.exec(message)?.[1];
+  return bare ? Number(bare) : undefined;
+}
+
+function extractRetryAfterMs(err: unknown): number | undefined {
+  const headers = (err as { headers?: Record<string, unknown> } | undefined)?.headers;
+  const value = headers?.['retry-after'];
+  if (typeof value !== 'string') return undefined;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
+}
+
+/** Internal wrapper distinguishing parse/validate failure from provider faults. */
+class ProviderResponseError extends Error {
+  constructor(
+    public readonly reason: 'schema' | 'parse',
+    cause?: unknown,
+  ) {
+    super(reason === 'parse' ? 'AI returned a malformed response body' : 'AI reply failed schema validation', { cause });
+  }
+}
+
+/** parseModelJson kept its behaviour; wrapped so retries classify correctly. */
+function parseProviderJson(raw: string): unknown {
+  try {
+    return parseModelJson(raw);
+  } catch (err) {
+    if (err instanceof HttpError) throw new ProviderResponseError('parse', err);
+    throw err;
+  }
 }
 
 function parseModelJson(raw: string): unknown {
