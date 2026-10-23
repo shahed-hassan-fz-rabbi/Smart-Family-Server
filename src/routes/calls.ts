@@ -65,6 +65,10 @@ callsRouter.post('/', validate(createCallSchema), async (req, res, next) => {
       initiatorId: req.user!.id,
       participants: participants.map((id) => ({ userId: new Types.ObjectId(id) })),
     });
+    logger.info(
+      { callId: String(call._id), mode: call.mode, participantCount: participants.length, initiatorId: String(req.user!.id) },
+      'call created — ringing',
+    );
 
     for (const calleeId of calleeIds) {
       await createNotification({
@@ -112,6 +116,7 @@ callsRouter.get('/:callId/token', async (req, res, next) => {
     }
 
     if (!config.livekit.enabled) {
+      logger.warn({ callId: String(call._id), userId: String(req.user!.id) }, 'call token refused — livekit not configured');
       res.status(503).json({
         error: 'CALLING_NOT_CONFIGURED',
         message:
@@ -144,8 +149,13 @@ callsRouter.get('/:callId/token', async (req, res, next) => {
 
     // livekit-server-sdk v2.x: toJwt() is asynchronous — must be awaited,
     // otherwise the Promise serializes as {} and the client cannot join.
+    const jwt = await token.toJwt();
+    logger.info(
+      { callId: String(call._id), userId: identity, room: roomName, mode: call.mode },
+      'call token issued',
+    );
     res.json({
-      token: await token.toJwt(),
+      token: jwt,
       url: config.livekit.url,
       room: roomName,
       mode: call.mode,
@@ -166,6 +176,7 @@ callsRouter.post('/:callId/decline', async (req, res, next) => {
     call.endedAt = new Date();
     await call.save();
     emitToUsers([call.initiatorId], 'call:declined', { callId: String(call._id) });
+    logger.info({ callId: String(call._id), userId: String(req.user!.id) }, 'call declined');
     res.json({ ok: true });
   } catch (err) {
     next(err);
