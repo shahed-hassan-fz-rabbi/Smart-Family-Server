@@ -4,7 +4,10 @@ services:
     runtime: node
     rootDir: .
     plan: free
-    buildCommand: npm ci && npm run build
+    # NODE_ENV=production (correct for runtime) makes npm skip devDependencies
+    # during install, which removes the local tsc used by the build step.
+    # --include=dev keeps devDependencies available for the build only.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
